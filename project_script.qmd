@@ -1,0 +1,226 @@
+---
+title: "data_order"
+format: html
+editor: visual
+---
+
+## Load Packages
+```{r}
+#install.packages("dplyr")
+#install.packages("tidyverse")
+#install.packages("DESeq2")
+#install.packages("fgsea")
+#install.packages("msigdbr")
+#install.packages("ggplot2")
+library(dplyr)
+library(tidyverse)
+library(DESeq2)
+library(fgsea)
+library(msigdbr)
+library(ggplot2)
+```
+
+## Load Data
+
+```{r}
+data1 <- read.csv("C:/Users/Administrator/Desktop/DTU/Sem1/Comp_prec_medicine/GSE220682_day0-22.csv")
+
+data2 <- read.csv("C:/Users/Administrator/Desktop/DTU/Sem1/Comp_prec_medicine/GSE220682_day180-360.csv")
+
+# View the first few rows
+print(dim(data1))
+print(dim(data2))
+```
+
+## Inspect Data
+
+```{r}
+names1 <- colnames(data1)
+names2 <- colnames(data2)
+
+# <<<take out the sufixes '.T1/2/3/4'
+clean_names1 <- sub("\\.T[1234]$", "", names1)
+clean_names2 <- sub("\\.T[1234]$", "", names2)
+
+#join all the names
+all_clean_names <- c(clean_names1, clean_names2)
+
+all_names_table <- table(all_clean_names)
+print("Are the patients repeated? (if there is a 4, that mean that patients is present at the 4 times of the experiment) (here we just show the 10 first patients)")
+print(all_names_table[1:10])
+
+result <- split(names(all_names_table), all_names_table )
+
+# Mostrar el resultado
+for (i in seq_along(result)) {
+  cat("Patients that appear", names(result)[i], "times:\n")
+  print(length(result[[i]]))
+}
+
+```
+
+```{r}
+genes1 <- data1[,1]
+genes2 <- data2[,1]
+
+print("Genes in each dataset:")
+print(length(genes1))
+print(length(genes2))
+
+print("How many genes do not match?")
+only_in_1_genes <- setdiff(genes1, genes2)
+only_in_2_genes <- setdiff(genes2, genes1)
+non_matching_genes <- union(only_in_1_genes, only_in_2_genes)
+print(length(non_matching_genes))
+
+print("... and how many match?")
+matching_genes <- intersect(genes1, genes2)
+print(length(matching_genes))
+```
+
+## JOIN THE DATASETs
+```{r}
+full_dataset <- merge(data1, data2, by = "GENE")
+print(dim(full_dataset))
+```
+We can see this full_dataset has the same number of genes as the matching_genes from the previous chunk
+
+
+## Eliminate every row where with all ceros
+
+```{r}
+print(dim(full_dataset))
+full_dataset <- full_dataset %>%
+  rowwise() %>%
+  filter(!all(c_across(where(is.numeric)) == 0)) %>%
+  ungroup()
+
+
+print(dim(full_dataset))
+```
+
+```{r}
+data <- full_dataset
+
+data <- as.data.frame(data)
+rownames(data) <- data[,1]
+data <- data[,-1]
+
+# Extract the two last characters of each name (that is the concerte time)
+time <- sapply(colnames(data), function(x) substr(x, nchar(x) - 1, nchar(x)))
+
+patient_data <- data.frame(colnames(data), time)
+colnames(patient_data) <- c("Patient ID", "time")
+clean_names1 <- sub("\\.T[1234]$", "", names1)
+#patient_data[,1] <- sub("\\.T[1234]$", "", patient_data[,1])
+patient_data
+```
+#Starting with GGSEA
+
+### Function to create the CountData and patient_data, dont touch!
+```{r}
+
+filter_data <- function(input1, input2) {
+  # Validate inputs
+  if (!all(c(input1, input2) %in% c("T1", "T2", "T3", "T4"))) {
+    stop("Inputs must be one of 'T1', 'T2', 'T3', or 'T4'")
+  }
+  
+  # Filter 'data'
+  filtered_data <- data[, grepl(paste0(input1, "$"), colnames(data)) | 
+                          grepl(paste0(input2, "$"), colnames(data))]
+  
+  # Filtrar 'patient_data'
+  filtered_patient_data <- patient_data[patient_data$time %in% c(input1, input2), ]
+  
+  # return both dataframes
+  return(list(filtered_data = filtered_data, 
+              filtered_patient_data = filtered_patient_data))
+}
+```
+
+```{r}
+#THIS IS WHAT YOU HAVE TO CHANGE
+result <- filter_data("T1", "T2")
+countData <- result$filtered_data
+colData <- result$filtered_patient_data
+```
+
+### Now the analysis
+
+```{r}
+dds <- DESeqDataSetFromMatrix(
+  countData = countData,
+  colData = colData,
+  design = ~ time
+)
+dds <- DESeq(dds)
+results<-results(dds)
+```
+
+```{r}
+dfres<-data.frame(results)
+dfres$significant <- ifelse(dfres$padj <= 0.05, "Yes", "No")
+```
+
+```{r}
+ggplot(dfres, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = padj < 0.05 & abs(log2FoldChange) > 1),alpha = 0.6) +
+  scale_color_manual(values = c("lightblue", "purple"), labels = c("Not Significant", "Significant")) +
+  labs(
+    x = "Log2 Fold Change",
+    y = "-Log10 Adjusted p-value",
+    title = "Volcano Plot"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+## Prepare a list of ranked genes by extracting the column with "stat" changes from the DESeq2 results and name the list with the gene IDs
+ranked_genes <- dfres$stat
+names(ranked_genes) <- rownames(dfres) 
+print(length(ranked_genes))
+## Remove missing values from the ranked gene list
+ranked_genes<-na.omit(ranked_genes)
+print(length(ranked_genes))
+```
+
+```{r}
+gene_sets <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "BP")
+vector<-data.frame(gene_sets$gene_symbol,gene_sets$gs_name)
+
+## Run fgsea using the gene sets as pathways and the ranked list of genes as stats
+fgsea_result <- fgsea(pathways = gene_sets,
+                      stats = ranked_genes)
+## Create a bar plot showing the normalized enrichment scores of the top 5 most enriched significant pathways
+fgsea_result_2 = fgsea_result[order(fgsea_result$padj)]
+fgsea_result_3 = fgsea_result_2[1:5]
+ggplot(fgsea_result_3, 
+       mapping=aes(x =reorder(pathway, NES), 
+                   y = NES))+
+  geom_col() + 
+  coord_flip() +
+  labs(x = "Pathway", 
+       y = "Normalized Enrichment Score (NES)", 
+       title = "Top 10 Enriched Pathways") +
+  theme_minimal()
+```
+
+```{r}
+topPathways <- fgsea_result  |> 
+  dplyr::arrange(padj) |> 
+  dplyr::slice(1:5)
+
+ggplot(topPathways, 
+       mapping = aes(x = reorder(pathway, NES), 
+                     y = NES)) +
+  geom_col() +
+  coord_flip() +
+  labs(x = "Pathway", 
+       y = "Normalized Enrichment Score (NES)", 
+       title = "Top 10 Enriched Pathways") +
+  theme_minimal()
+```
+
+
