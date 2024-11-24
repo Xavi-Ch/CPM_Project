@@ -1,0 +1,60 @@
+---
+title: "CPM_project"
+author: "Xavi Chapatte"
+format: html
+editor: visual
+---
+
+## jjj
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+GSE220682_day0_22 <- read.csv2("C:/Users/Xavi/Documents/Master in Bioinformatics and Systems Biology/Autum 2024/Computational Precision Medicine/Project/GSE220682_day0-22.csv")
+GSE220682_day180_360 <- read.csv2("C:/Users/Xavi/Documents/Master in Bioinformatics and Systems Biology/Autum 2024/Computational Precision Medicine/Project/GSE220682_day180-360.csv")
+
+
+```
+
+```{r}
+full_dataset <- merge(GSE220682_day0_22, GSE220682_day180_360, by = "GENE")
+print(dim(full_dataset))
+```
+
+```{r}
+rownames(full_dataset) <- full_dataset[, 1]
+full_dataset <- full_dataset[, -1]
+
+```
+
+```{r}
+df <- data.frame(sample = GSE220682_day0_22[,3])
+ggplot(data = df, mapping = aes(x = sample)) +
+  geom_density()+
+   xlim(1, 10)
+
+```
+
+```{r}
+full_dataset <- full_dataset[rowSums(full_dataset) > 0,] 
+pca_count <- prcomp(t(full_dataset), scale. = TRUE) 
+```
+
+```{r}
+batch_df <- data.frame(
+  samples = colnames(full_dataset),
+  batch_number = sub(".*\\.(T\\d)$", "\\1", colnames(full_dataset))
+)
+```
+
+```{r}
+
+df <- data.frame(PC1 = pca_count$x[,1], PC2 = pca_count$x[,2], batch = batch_df[match(colnames(full_dataset), batch_df$samples),]$batch_number)
+
+ggplot(df, aes(x = PC1, y = PC2, color = batch)) +
+  geom_point()+
+  xlim(-600, 600)+
+  ylim(-300, 300)
+```
